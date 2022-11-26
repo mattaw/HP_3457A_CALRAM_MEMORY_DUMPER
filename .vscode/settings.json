@@ -1,0 +1,16 @@
+{
+    "python.formatting.provider": "black",
+    "python.linting.flake8Enabled": true,
+    "python.linting.formatOnSave": true,
+    "python.analysis.importFormat": "relative",
+    "python.analysis.inlayHints.functionReturnTypes": true,
+    "python.analysis.indexing": true,
+    "python.analysis.include": [
+        ".\\venv"
+    ],
+    "python.analysis.autoImportCompletions": true,
+    "python.analysis.typeCheckingMode": "basic",
+    "python.linting.enabled": true,
+    "python.linting.lintOnSave": true,
+    "editor.formatOnSave": true,
+}
