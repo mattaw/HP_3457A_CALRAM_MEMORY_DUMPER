@@ -1,0 +1,44 @@
+
+[project]
+name = "HP_3457A_CalRAM_Memory_Dumper"
+dynamic = ["version"]
+description = "Dump the contents of the vital CalRAM via GPIB using PyVISA to a file that can be flashed into a new chip."
+authors = [
+    {name = "Matthew Swabey", email = "matthew@swabey.org"},
+]
+dependencies = [
+    "attrs>=22.1.0",
+    "pyvisa>=1.12.0",
+    "rich-click>=1.5.2",
+]
+requires-python = ">=3.7"
+readme = "README.md"
+license = {text = "AGPL-3.0-or-later"}
+
+[project.scripts]
+HP-3457A-dumper = "HP_3457A_dumper.cli:cli"
+
+[project.optional-dependencies]
+
+[tool.pdm]
+version = { source = "file", path = "HP_3457A_dumper/__about__.py" }
+
+[tool.pdm.dev-dependencies]
+dev = [
+    "black>=22.10.0",
+    "flake8>=5.0.4",
+    "mypy>=0.991",
+    "isort>=5.10.1",
+]
+
+[tool.pdm.scripts]
+
+[tool.flake8]
+max-line-length = 88
+
+[tool.isort]
+profile = "black"
+
+[build-system]
+requires = ["pdm-pep517>=1.0.0"]
+build-backend = "pdm.pep517.api"
