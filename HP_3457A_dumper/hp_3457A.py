@@ -6,11 +6,13 @@
 import hashlib
 import re
 from logging import getLogger
-from typing import ClassVar, Dict, Self, Set, Tuple
+import struct
+from typing import ClassVar, Dict, List, Optional, Self, Set, Tuple
 
 import pyvisa
 from attr import define, field, frozen
 from pyvisa.resources import GPIBInstrument
+from rich.progress import track
 
 logger = getLogger(__name__)
 
@@ -63,13 +65,65 @@ class HP_3457A:
     class RevDetectionFailed(Exception):
         pass
 
+    @frozen
+    class MemoryMap:
+        type_: int = field()
+        desc: str = field()
+        read_: Tuple[int, int] = field()  # Start ADDR, Size
+        write: Optional[Tuple[int, int]] = field(default=None)
+        protr: Optional[Tuple[int, int]] = field(default=None)
+        protw: Optional[Tuple[int, int]] = field(default=None)
+
+        ROM: ClassVar[int] = 1
+        RAM: ClassVar[int] = 2
+        PROTECTED: ClassVar[int] = 3
+
     inst: GPIBInstrument = field()
     a1: int = field()
     rev: Tuple[int, int] = field()
+    memory_map: Dict[str, MemoryMap]
 
     A1_03457_66501: ClassVar[int] = 1
     A1_03457_66511: ClassVar[int] = 2
     PYVISA_GPIB_PATTERN: ClassVar[re.Pattern] = re.compile(r"GPIB\d::\d+::INSTR")
+
+    MEMORY_MAPS: ClassVar[Dict[int, Dict[str, MemoryMap]]] = {
+        A1_03457_66501: {
+            # Note: No POKE command on this version, so read only.
+            # Address    AAAA_AAAA_AAAA_AAAA
+            # Bus        1111_11
+            # Signal     5432_1098_7654_3210
+            "U503": MemoryMap(
+                type_=MemoryMap.ROM,
+                desc="8K 8-bit NMOS ROM",
+                read_=(0b0110_0000_0000_0000, 0x2000),
+            ),
+            "U502": MemoryMap(
+                type_=MemoryMap.ROM,
+                desc="32K 8-bit EEPROM",
+                read_=(0b1000_0000_0000_0000, 0x8000),
+            ),
+            "U506": MemoryMap(
+                type_=MemoryMap.RAM,
+                desc="2K 8-bit RAM",
+                read_=(0b0100_1000_0000_0000, 0x0800),
+                # write=(0b0100_1000_0000_0000, 0x0800),
+                write=None,
+            ),
+            "U511": MemoryMap(
+                type_=MemoryMap.RAM,
+                desc="1.5K 8-bit RAM and 0.5K 8-bit CAL-RAM",
+                read_=(0b0101_0000_0000_0000, 0x0600),
+                # write=(0b0101_0000_0000_0000, 0x0600),
+                write=None,
+                protr=(0b0101_0110_0000_0000, 0x0200),
+                # protw=(0b0101_0110_0000_0000, 0x0200),
+                protw=None,
+            ),
+        }
+    }
+
+    _PEEK_PACK_F = struct.Struct("<h").pack
 
     @classmethod
     def select(cls, resource_name: str) -> Self:
@@ -86,8 +140,10 @@ class HP_3457A:
         logger.debug("ERR: %s", errors)
         if cls.Errors.UNKCMD in errors:
             a1 = cls.A1_03457_66501
+            memory_map = cls.MEMORY_MAPS[a1]
         elif cls.Errors.REQPARAMMISS in errors:
             a1 = cls.A1_03457_66511
+            memory_map = cls.MEMORY_MAPS[a1]
         else:
             raise cls.A1DetectionFailed(
                 f"Errors Detected: {', '.join(f'{str(e)}' for e in errors)}"
@@ -98,7 +154,7 @@ class HP_3457A:
             raise cls.RevDetectionFailed(f"REV string {rev_str} could not be parsed.")
         else:
             rev = tuple(rev)
-        return cls(inst=hp, a1=a1, rev=rev)
+        return cls(inst=hp, a1=a1, rev=rev, memory_map=memory_map)
 
     def query(self, str: str) -> str:
         return self.inst.query(str)
@@ -108,6 +164,29 @@ class HP_3457A:
 
     def write(self, str: str) -> None:
         self.inst.write(str)
+
+    def _peek(self, ptr: int) -> Tuple[int, int]:
+        peek_instr = f"PEEK {ptr}"
+        peek_val_short_raw = int(float(self.query(peek_instr)))
+        ptr_incr_val, ptr_val = self._PEEK_PACK_F(peek_val_short_raw)
+        logger.debug(
+            "%s - 0x%04X: %02X %02X",
+            peek_instr,
+            ptr,
+            ptr_val,
+            ptr_incr_val,
+        )
+        return (ptr_val, ptr_incr_val)
+
+    def dump(self, start: int, size: int, progress: bool = False) -> List[int]:
+        dump_vals: List[int] = []
+        if not progress:
+            for ptr in range(start, start + size, 2):
+                dump_vals.extend(self._peek(ptr=ptr))
+        else:
+            for ptr in track(range(start, start + size, 2)):
+                dump_vals.extend(self._peek(ptr=ptr))
+        return dump_vals
 
 
 # Function to Get MD5 Sum

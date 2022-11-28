@@ -1,5 +1,8 @@
 import logging
+import struct
+from datetime import datetime
 from logging import basicConfig, getLogger
+from pathlib import Path
 
 import pyvisa
 import rich_click as click
@@ -17,7 +20,7 @@ LOG_LEVELS = {
     "WARNING",
     "ERROR",
     "CRITICAL",
-}  # sadly getLevelNamesMapping only in CPython >=3.11
+}  # sadly getLevelNamesMapping is CPython >=3.11
 
 basicConfig(
     format="%(module)-20s %(message)s",
@@ -41,7 +44,14 @@ logger = getLogger(__name__)
     show_default=True,
     help="Choose PyVISA logging: critical, error, warning, info, debug",
 )
-def cli(debug: str, debug_pyvisa: str) -> None:
+@click.option(
+    "-t",
+    "--target",
+    default="HP_3457A Dumps",
+    show_default=True,
+    help="Choose directory to save in",
+)
+def cli(debug: str, debug_pyvisa: str, target: str) -> None:
     # Logging
     if debug.upper() in LOG_LEVELS:
         loggers = [
@@ -82,12 +92,12 @@ def cli(debug: str, debug_pyvisa: str) -> None:
         )
     resources_idxs = range(len(resources))
     console.print("PyVISA Detected Instruments:")
-    table = Table()
-    table.add_column("ID", justify="right")
-    table.add_column("VISA Resource Name")
+    sel_hp_table = Table()
+    sel_hp_table.add_column("ID", justify="right")
+    sel_hp_table.add_column("VISA Resource Name")
     for idx, res in zip(resources_idxs, resources):
-        table.add_row(f"{idx}", res)
-    console.print(table)
+        sel_hp_table.add_row(f"{idx}", res)
+    console.print(sel_hp_table)
     resource_idx = Prompt.ask(
         "Choose ID of HP 3457A: ", choices=[f"{idx}" for idx in resources_idxs]
     )
@@ -113,3 +123,52 @@ def cli(debug: str, debug_pyvisa: str) -> None:
         f" [bold]{a1_str}[/bold]",
         highlight=False,
     )
+
+    # Choose memory chip to dump
+    sel_mem_table = Table()
+    sel_mem_table.add_column("ID", justify="right")
+    sel_mem_table.add_column("Memory Chip")
+    sel_mem_table.add_column("Address")
+    sel_mem_table.add_column("Size")
+    sel_mem_table.add_column("Prot. Addr.")
+    sel_mem_table.add_column("Prot. Size")
+
+    for key, chip in hp.memory_map.items():
+        sel_mem_table.add_row(
+            key,
+            chip.desc,
+            f"0x{chip.read_[0]:04x}",
+            f"0x{chip.read_[1]:04x}",
+            f"0x{chip.protr[0]:04x}" if chip.protr else "-",
+            f"0x{chip.protr[1]:04x}" if chip.protr else "-",
+        )
+    console.print(sel_mem_table)
+    memory_chip = Prompt.ask(
+        "Choose the memory chip to dump: ", choices=[id for id in hp.memory_map.keys()]
+    )
+
+    # Dump to binary file and ASCII file
+    console.print("")
+    console.print(f"Dumping {memory_chip}...")
+    target_dir = Path.home() / target
+    target_dir.mkdir(parents=True, exist_ok=True)
+    filename = (
+        "HP_3457A_A1_"
+        f"{'03457-66501' if hp.a1 == HP_3457A.A1_03457_66501 else '03457-66511'}"
+        f"_{memory_chip}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+    )
+    with open(target_dir / (filename + ".bin"), "wb") as f_bin:
+        with open(target_dir / (filename + ".txt"), "w") as f_txt:
+            memory_chip_map = hp.memory_map[memory_chip]
+            if memory_chip_map.protr is None:
+                start_ptr = memory_chip_map.read_[0]
+                size = memory_chip_map.read_[1]
+            else:
+                start_ptr = min(memory_chip_map.read_[0], memory_chip_map.protr[0])
+                size = memory_chip_map.read_[1] + memory_chip_map.protr[1]
+            dump = hp.dump(start=start_ptr, size=size, progress=True)
+            pack_func = struct.Struct("B").pack
+            for idx, b in enumerate(dump, start=start_ptr):
+                f_bin.write(pack_func(b))
+                f_txt.write(f"0x{idx:04X}: {b:02X}\n")
+            f_txt.write("\n")
