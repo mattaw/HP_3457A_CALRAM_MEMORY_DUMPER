@@ -5,14 +5,24 @@
 
 import hashlib
 import re
-from logging import getLogger
 import struct
-from typing import ClassVar, Dict, List, Optional, Self, Set, Tuple
+from logging import getLogger
+from typing import (
+    Callable,
+    ClassVar,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Self,
+    Sequence,
+    Set,
+    Tuple,
+)
 
 import pyvisa
 from attr import define, field, frozen
 from pyvisa.resources import GPIBInstrument
-from rich.progress import track
 
 logger = getLogger(__name__)
 
@@ -165,7 +175,7 @@ class HP_3457A:
     def write(self, str: str) -> None:
         self.inst.write(str)
 
-    def _peek(self, ptr: int) -> Tuple[int, int]:
+    def _peek_bytes(self, ptr: int) -> Tuple[int, int]:
         peek_instr = f"PEEK {ptr}"
         peek_val_short_raw = int(float(self.query(peek_instr)))
         ptr_incr_val, ptr_val = self._PEEK_PACK_F(peek_val_short_raw)
@@ -178,14 +188,26 @@ class HP_3457A:
         )
         return (ptr_val, ptr_incr_val)
 
-    def dump(self, start: int, size: int, progress: bool = False) -> List[int]:
+    def dump(
+        self,
+        start: int,
+        size: int,
+        progress: Callable[[Sequence[int]], Iterable[int]] = lambda s: s,
+    ) -> List[int]:
         dump_vals: List[int] = []
-        if not progress:
-            for ptr in range(start, start + size, 2):
-                dump_vals.extend(self._peek(ptr=ptr))
-        else:
-            for ptr in track(range(start, start + size, 2)):
-                dump_vals.extend(self._peek(ptr=ptr))
+        for ptr in progress(range(start, start + size, 2)):
+            peek_instr = f"PEEK {ptr}"
+            peek_val_short_raw = int(float(self.query(peek_instr)))
+            ptr_incr_val, ptr_val = self._PEEK_PACK_F(peek_val_short_raw)
+            logger.debug(
+                "%s - 0x%04X: %02X %02X",
+                peek_instr,
+                ptr,
+                ptr_val,
+                ptr_incr_val,
+            )
+            dump_vals.append(ptr_val)
+            dump_vals.append(ptr_incr_val)
         return dump_vals
 
 

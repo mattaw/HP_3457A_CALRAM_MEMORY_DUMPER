@@ -7,6 +7,7 @@ from pathlib import Path
 import pyvisa
 import rich_click as click
 from rich.logging import RichHandler
+from rich.progress import track
 from rich.prompt import Prompt
 from rich.table import Table
 
@@ -166,9 +167,8 @@ def cli(debug: str, debug_pyvisa: str, target: str) -> None:
             else:
                 start_ptr = min(memory_chip_map.read_[0], memory_chip_map.protr[0])
                 size = memory_chip_map.read_[1] + memory_chip_map.protr[1]
-            dump = hp.dump(start=start_ptr, size=size, progress=True)
+            dump = hp.dump(start=start_ptr, size=size, progress=track)
             pack_func = struct.Struct("B").pack
             for idx, b in enumerate(dump, start=start_ptr):
                 f_bin.write(pack_func(b))
                 f_txt.write(f"0x{idx:04X}: {b:02X}\n")
-            f_txt.write("\n")
