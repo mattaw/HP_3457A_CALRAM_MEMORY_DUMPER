@@ -13,7 +13,7 @@ from rich.table import Table
 
 from .__about__ import __version__
 from .console import console
-from .hp_3457A import HP_3457A
+from .hp_3457A import HP_3457A, WriteProt
 
 LOG_LEVELS = {
     "DEBUG",
@@ -70,7 +70,7 @@ def cli(debug: str, debug_pyvisa: str, target: str) -> None:
         exit(-1)
     if debug_pyvisa.upper() in LOG_LEVELS:
         logger_pyvisa = getLogger("pyvisa")
-        logger_pyvisa.setLevel(logging.INFO)
+        logger_pyvisa.setLevel(debug_pyvisa.upper())
     else:
         console.print(
             f"PyVISA debug level of '{debug_pyvisa}' invalid. Valid levels are:"
@@ -112,63 +112,52 @@ def cli(debug: str, debug_pyvisa: str, target: str) -> None:
             f"[bold]ID {resource_idx} - {resource_name}:[/bold] Timeout - Exiting."
         )
         exit(-1)
-    if hp.a1 == HP_3457A.A1_03457_66501:
-        a1_str = "03457_66501"
-    elif hp.a1 == HP_3457A.A1_03457_66511:
-        a1_str = "03457_66511"
-    else:
-        raise Exception("Should not have been possible: Unknown A1 board detected.")
+
     console.print(
         f"[bold]ID {resource_idx} {resource_name}[/bold] Detected HP 3457A REV"
         f" [bold]{'.'.join(str(r) for r in hp.rev)}[/bold] with Main Controller Version"
-        f" [bold]{a1_str}[/bold]",
+        f" [bold]{hp.a1.BOARD_STR}[/bold]",
         highlight=False,
     )
 
     # Choose memory chip to dump
     sel_mem_table = Table()
-    sel_mem_table.add_column("ID", justify="right")
+    sel_mem_table.add_column("Reference", justify="right")
     sel_mem_table.add_column("Memory Chip")
     sel_mem_table.add_column("Address")
     sel_mem_table.add_column("Size")
-    sel_mem_table.add_column("Prot. Addr.")
-    sel_mem_table.add_column("Prot. Size")
+    sel_mem_table.add_column("Protected", justify="center")
 
-    for key, chip in hp.memory_map.items():
+    for key, region in hp.a1.REGIONS.items():
         sel_mem_table.add_row(
             key,
-            chip.desc,
-            f"0x{chip.read_[0]:04x}",
-            f"0x{chip.read_[1]:04x}",
-            f"0x{chip.protr[0]:04x}" if chip.protr else "-",
-            f"0x{chip.protr[1]:04x}" if chip.protr else "-",
+            region.desc,
+            f"0x{region.start:04x}",
+            f"0x{region.size:04x}",
+            "Yes" if isinstance(region, WriteProt) else "",
         )
     console.print(sel_mem_table)
-    memory_chip = Prompt.ask(
-        "Choose the memory chip to dump: ", choices=[id for id in hp.memory_map.keys()]
+    region = Prompt.ask(
+        "Choose the memory region to dump: ",
+        choices=[id for id in hp.a1.REGIONS.keys()],
     )
 
     # Dump to binary file and ASCII file
     console.print("")
-    console.print(f"Dumping {memory_chip}...")
+    console.print(f"Dumping {region}...")
     target_dir = Path.home() / target
     target_dir.mkdir(parents=True, exist_ok=True)
     filename = (
-        "HP_3457A_A1_"
-        f"{'03457-66501' if hp.a1 == HP_3457A.A1_03457_66501 else '03457-66511'}"
-        f"_{memory_chip}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+        f"HP_3457A_R{hp.rev[0]}-{hp.rev[1]}_A1_{hp.a1.BOARD_STR}"
+        f"_{region}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
     )
     with open(target_dir / (filename + ".bin"), "wb") as f_bin:
         with open(target_dir / (filename + ".txt"), "w") as f_txt:
-            memory_chip_map = hp.memory_map[memory_chip]
-            if memory_chip_map.protr is None:
-                start_ptr = memory_chip_map.read_[0]
-                size = memory_chip_map.read_[1]
-            else:
-                start_ptr = min(memory_chip_map.read_[0], memory_chip_map.protr[0])
-                size = memory_chip_map.read_[1] + memory_chip_map.protr[1]
-            dump = hp.dump(start=start_ptr, size=size, progress=track)
+            region = hp.a1.REGIONS[region]
+            if not region.end:
+                raise Exception("Need to implement single byte read/write")
+            dump = hp.dump(start=region.start, end=region.end, progress=track)
             pack_func = struct.Struct("B").pack
-            for idx, b in enumerate(dump, start=start_ptr):
+            for idx, b in enumerate(dump, start=region.start):
                 f_bin.write(pack_func(b))
                 f_txt.write(f"0x{idx:04X}: {b:02X}\n")
